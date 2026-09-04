@@ -1,0 +1,10 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/levi/test/deadreckoning/dr_nav/app/src/main/cpp/build_test/cmake_install.cmake",
+		"/home/levi/test/deadreckoning/dr_nav/app/src/main/cpp/build_test/_deps/googletest-build/cmake_install.cmake",
+		"/home/levi/test/deadreckoning/dr_nav/app/src/main/cpp/build_test/_deps/googletest-build/googlemock/cmake_install.cmake",
+		"/home/levi/test/deadreckoning/dr_nav/app/src/main/cpp/build_test/_deps/googletest-build/googletest/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

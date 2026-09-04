@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- MapLibre GL map fills the entire fragment -->
+    <org.maplibre.android.maps.MapView
+        android:id="@+id/mapView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:maplibre_cameraZoom="15.0"
+        app:maplibre_cameraTargetLat="12.9716"
+        app:maplibre_cameraTargetLng="77.5946" />
+
+    <!-- Mode badge — top-right overlay -->
+    <com.google.android.material.chip.Chip
+        android:id="@+id/chipMode"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="16dp"
+        android:text="GNSS"
+        android:textColor="@android:color/white"
+        android:textSize="13sp"
+        app:chipBackgroundColor="#2A9D8F"
+        app:chipCornerRadius="16dp" />
+
+    <!-- Outage timer badge — shown only during DR_ACTIVE -->
+    <TextView
+        android:id="@+id/tvOutageTimer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="56dp"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/badge_bg"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="4dp"
+        android:text="DR: 0s"
+        android:textColor="@android:color/white"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+</FrameLayout>

@@ -1,0 +1,5 @@
+if(EXISTS "/home/levi/test/deadreckoning/dr_nav/app/src/main/cpp/build_test/idr_tests_e3b0c442_tests.cmake")
+  include("/home/levi/test/deadreckoning/dr_nav/app/src/main/cpp/build_test/idr_tests_e3b0c442_tests.cmake")
+else()
+  add_test(idr_tests_NOT_BUILT idr_tests_NOT_BUILT)
+endif()

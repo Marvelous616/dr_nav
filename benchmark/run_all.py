@@ -113,13 +113,172 @@ class IEKF(EKF):
         self.P_N *= (1 - K_N); self.P_E *= (1 - K_E)
 
 
-# ─── NHC outage model (no ML) ────────────────────────────────────────────────
+# ─── OutageModel base class ──────────────────────────────────────────────────
 
-class NHCModel:
-    name = "NHC"
+class OutageModel:
+    """Base class for all outage-duration pseudo-GNSS predictors."""
+    name = "Base"
+
     def predict_outage_delta(self, imu_window, filt):
-        # NHC: constrain lateral velocity → tiny correction only
+        """
+        Given the recent IMU window and filter state, return a pseudo-GNSS
+        position increment (dN, dE, stdN, stdE) in metres.
+        imu_window: list of (ax,ay,az,gx,gy,gz) tuples, last N_WINDOW steps.
+        filt: BaseFilter with .lat, .lon, .vN, .vE attributes.
+        """
+        raise NotImplementedError
+
+
+# ─── NHC (Non-Holonomic Constraint) — no ML ──────────────────────────────────
+
+class NHCModel(OutageModel):
+    """Zero lateral velocity constraint. Minimal correction, no ML."""
+    name = "NHC"
+
+    def predict_outage_delta(self, imu_window, filt):
+        # NHC: lateral vel ≈ 0 → push position estimate along heading only.
+        # Return zero delta (heading-aligned motion handled inside filter).
         return 0.0, 0.0, 2.0, 2.0   # (dN, dE, stdN, stdE)
+
+
+# ─── LSTM outage model ────────────────────────────────────────────────────────
+
+class LSTMModel(OutageModel):
+    """Loads models/lstm.pth if present; falls back to NHC silently."""
+    name = "LSTM"
+    _N_WINDOW   = 100
+    _N_FEATURES = 12
+
+    def __init__(self):
+        self._model = None
+        self._device = None
+        self._window = []   # rolling deque of feature rows
+        self._load()
+
+    def _load(self):
+        ckpt_path = Path("models/lstm.pth")
+        if not ckpt_path.exists():
+            return
+        try:
+            import torch
+            from pipeline.train_lstm import LSTMPredictor, N_WINDOW, N_FEATURES
+            ckpt = torch.load(str(ckpt_path), map_location="cpu")
+            m = LSTMPredictor(hidden=ckpt.get("hidden", 128),
+                              layers=ckpt.get("layers", 2))
+            m.load_state_dict(ckpt["model_state"])
+            m.eval()
+            self._model = m
+            self._device = torch.device("cpu")
+        except Exception as e:
+            print(f"[LSTMModel] Could not load checkpoint ({e}). Using NHC fallback.")
+
+    def _make_row(self, imu_window, filt, elapsed):
+        """Build one feature row from the latest IMU reading."""
+        if imu_window and len(imu_window[-1]) >= 6:
+            ax, ay, az, gx, gy, gz = imu_window[-1][:6]
+        else:
+            ax = ay = az = gx = gy = gz = 0.0
+        ins_N = ins_E = 0.0  # relative N/E from filter origin (approx 0 in Python sim)
+        vN = getattr(filt, "vN", 0.0)
+        vE = getattr(filt, "vE", 0.0)
+        heading = math.atan2(vE, vN) if (vN != 0 or vE != 0) else 0.0
+        return [ax, ay, az, gx, gy, gz, ins_N, ins_E, vN, vE, heading, float(elapsed)]
+
+    def predict_outage_delta(self, imu_window, filt, elapsed=0.0):
+        if self._model is None:
+            return 0.0, 0.0, 2.0, 2.0
+
+        import torch, numpy as np
+        row = self._make_row(imu_window, filt, elapsed)
+        self._window.append(row)
+        if len(self._window) > self._N_WINDOW:
+            self._window = self._window[-self._N_WINDOW:]
+
+        if len(self._window) < self._N_WINDOW:
+            return 0.0, 0.0, 2.0, 2.0
+
+        x = torch.tensor(self._window, dtype=torch.float32).unsqueeze(0)  # (1,T,F)
+        with torch.no_grad():
+            dN_dE = self._model(x).squeeze(0).numpy()
+        return float(dN_dE[0]), float(dN_dE[1]), 1.5, 1.5
+
+
+# ─── TCN-BiLSTM outage model ──────────────────────────────────────────────────
+
+class TCNBiLSTMModel(LSTMModel):
+    """Loads models/tcn_bilstm.pth if present; falls back to NHC silently."""
+    name = "TCNBiLSTM"
+
+    def _load(self):
+        ckpt_path = Path("models/tcn_bilstm.pth")
+        if not ckpt_path.exists():
+            return
+        try:
+            import torch
+            from pipeline.train_tcn_bilstm import TCNBiLSTMPredictor
+            ckpt = torch.load(str(ckpt_path), map_location="cpu")
+            m = TCNBiLSTMPredictor()
+            m.load_state_dict(ckpt["model_state"])
+            m.eval()
+            self._model = m
+            self._device = torch.device("cpu")
+        except Exception as e:
+            print(f"[TCNBiLSTMModel] Could not load checkpoint ({e}). Using NHC fallback.")
+
+
+# ─── GBDT outage model ────────────────────────────────────────────────────────
+
+class GBDTModel(OutageModel):
+    """Loads models/gbdt_dN.json + gbdt_dE.json + gbdt_scaler.npz if present."""
+    name = "GBDT"
+    _N_WINDOW   = 100
+    _N_FEATURES = 12
+
+    def __init__(self):
+        self._models = []
+        self._scaler_mean = None
+        self._scaler_scale = None
+        self._window = []
+        self._load()
+
+    def _load(self):
+        try:
+            import xgboost as xgb, numpy as np
+            mN = xgb.XGBRegressor(); mN.load_model("models/gbdt/gbdt_dN.json")
+            mE = xgb.XGBRegressor(); mE.load_model("models/gbdt/gbdt_dE.json")
+            sc = np.load("models/gbdt/gbdt_scaler.npz")
+            self._models = [mN, mE]
+            self._scaler_mean  = sc["mean"]
+            self._scaler_scale = sc["scale"]
+        except Exception as e:
+            pass  # Graceful fallback to NHC
+
+    def predict_outage_delta(self, imu_window, filt, elapsed=0.0):
+        if not self._models:
+            return 0.0, 0.0, 2.0, 2.0
+
+        import numpy as np
+        if imu_window and len(imu_window[-1]) >= 6:
+            ax, ay, az, gx, gy, gz = imu_window[-1][:6]
+        else:
+            ax = ay = az = gx = gy = gz = 0.0
+        vN = getattr(filt, "vN", 0.0)
+        vE = getattr(filt, "vE", 0.0)
+        heading = math.atan2(vE, vN) if (vN != 0 or vE != 0) else 0.0
+
+        row = [ax, ay, az, gx, gy, gz, 0.0, 0.0, vN, vE, heading, float(elapsed)]
+        self._window.append(row)
+        if len(self._window) > self._N_WINDOW:
+            self._window = self._window[-self._N_WINDOW:]
+        if len(self._window) < self._N_WINDOW:
+            return 0.0, 0.0, 2.0, 2.0
+
+        W = np.array(self._window, dtype=np.float32)
+        feat = np.concatenate([W.mean(0), W.std(0), W[-1]]).reshape(1, -1)
+        feat = (feat - self._scaler_mean) / self._scaler_scale
+        dN = float(self._models[0].predict(feat)[0])
+        dE = float(self._models[1].predict(feat)[0])
+        return dN, dE, 1.2, 1.2
 
 
 # ─── Evaluation helpers ───────────────────────────────────────────────────────
@@ -185,7 +344,7 @@ def simulate_outage(imu_df, gnss_df, gt_df, filt, model, outage_sec,
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 FILTERS = [RawINS, EKF, IEKF]
-MODELS  = [NHCModel]
+MODELS  = [NHCModel, LSTMModel, TCNBiLSTMModel, GBDTModel]
 
 
 def main():

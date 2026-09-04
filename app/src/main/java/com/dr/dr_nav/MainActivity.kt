@@ -1,32 +1,48 @@
 package com.dr.dr_nav
 
-import androidx.appcompat.app.AppCompatActivity
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
-import android.widget.TextView
-import com.dr.dr_nav.databinding.ActivityMainBinding
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import com.dr.dr_nav.ui.ControlPanelFragment
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var binding: ActivityMainBinding
+    private val permissionReq = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fine   = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        val coarse = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        if (!fine && !coarse) {
+            Toast.makeText(this, "Location permission is required for DR.", Toast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
 
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+        // Request permissions
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) {
+            permissionReq.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
+        }
 
-        // Example of a call to a native method
-        binding.sampleText.text = stringFromJNI()
+        // Add the control panel fragment dynamically into the bottom sheet container
+        if (savedInstanceState == null) {
+            supportFragmentManager.beginTransaction()
+                .replace(R.id.controlPanelContainer, ControlPanelFragment())
+                .commit()
+        }
     }
 
-    /**
-     * A native method that is implemented by the 'dr_nav' native library,
-     * which is packaged with this application.
-     */
-    external fun stringFromJNI(): String
-
     companion object {
-        // Used to load the 'dr_nav' library on application startup.
         init {
             System.loadLibrary("dr_nav")
         }
